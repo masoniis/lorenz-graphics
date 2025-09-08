@@ -1,9 +1,13 @@
-# Example 6
-EXE=main
+# Executable Name
+EXE=hw2
 
-# Main target
+# Object files
+OBJ=main.o state.o lorenz.o
+
+# target
 all: $(EXE)
 
+# Platform-specific configuration
 #  Msys/MinGW
 ifeq "$(OS)" "Windows_NT"
 CFLG=-O3 -Wall -DUSEGLEW
@@ -23,16 +27,14 @@ endif
 CLEAN=rm -f $(EXE) *.o *.a
 endif
 
-# Compile rules
+# Implicit rule for compiling C files
 .c.o:
-	gcc -c $(CFLG)  $<
-.cpp.o:
-	g++ -c $(CFLG)  $<
+	gcc -c $(CFLG) $<
 
-#  Link
-main:main.o
-	gcc $(CFLG) -o $@ $^  $(LIBS)
+# Link the executable
+$(EXE): $(OBJ)
+	gcc $(CFLG) -o $@ $^ $(LIBS)
 
-#  Clean
+# Clean up build files
 clean:
 	$(CLEAN)

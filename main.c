@@ -1,60 +1,59 @@
 /*
- *  Coordinates
+ *  Lorenz Attractor Visualizer
  *
- *  Display 2, 3 and 4 dimensional coordinates in 3D.
+ *  Interactive 3D visualization of the Lorenz attractor
  *
  *  Key bindings:
- *  1      2D coordinates
- *  2      2D coordinates with fixed Z value
- *  3      3D coordinates
- *  4      4D coordinates
- *  +/-    Increase/decrease z or w
+ *  SPACE  Toggle animation on/off
+ *  c/C    Toggle color mode (single/rainbow/fade)
+ *  +/-    Increase/decrease animation speed
+ *  r/R    Increase/decrease r parameter (rho)
+ *  s/S    Increase/decrease s parameter (sigma)
+ *  b/B    Increase/decrease b parameter (beta)
  *  arrows Change view angle
  *  0      Reset view angle
  *  ESC    Exit
  */
+
+#include "lorenz.h"
+#include "state.h"
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 #ifdef USEGLEW
 #include <GL/glew.h>
 #endif
-//  OpenGL with prototypes for glext
+
 #define GL_GLEXT_PROTOTYPES
 #ifdef __APPLE__
 #include <GLUT/glut.h>
-// Tell Xcode IDE to not gripe about OpenGL deprecation
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #else
 #include <GL/glut.h>
 #endif
 
-//  Globals
-int th = 0;     // Azimuth of view angle
-int ph = 0;     // Elevation of view angle
-int mode = 1;   // Dimension (1-4)
-double z = 0;   // Z variable
-double w = 1;   // W variable
-double dim = 2; // Dimension of orthogonal box
-const char *text[] = {"", "2D", "3D constant Z", "3D",
-                      "4D"}; // Dimension display text
+// Animation parameters
+#define MIN_SPEED 1.0
+#define SPEED_STEP 1.0
+
+// Global pointer to the application state
+State *appState = NULL;
 
 /*
  *  Convenience routine to output raster text
- *  Use VARARGS to make this more flexible
  */
 #define LEN 8192 // Maximum length of text string
 void Print(const char *format, ...) {
   char buf[LEN];
   char *ch = buf;
   va_list args;
-  //  Turn the parameters into a character string
   va_start(args, format);
   vsnprintf(buf, LEN, format, args);
   va_end(args);
-  //  Display the characters one at a time at the current raster position
   while (*ch)
-    glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *ch++);
+    glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *ch++);
 }
 
 /*
@@ -77,81 +76,148 @@ void ErrCheck(const char *where) {
     fprintf(stderr, "ERROR: %s [%s]\n", gluErrorString(err), where);
 }
 
+void reshape(int width, int height);
+
+/*
+ *  Set color based on current color mode and point index
+ */
+void setPointColor(int pointIndex, int totalPoints) {
+  switch (appState->colorMode) {
+  case 0: // Single color - cyan
+    glColor3f(0.0f, 1.0f, 1.0f);
+    break;
+  case 1: // Rainbow mode
+  {
+    float hue = (float)pointIndex / totalPoints * 360.0f;
+    float c = 1.0f, x = c * (1.0f - fabs(fmod(hue / 60.0f, 2.0f) - 1.0f)),
+          m = 0.0f;
+    float r = 0, g = 0, b = 0;
+    if (hue < 60) {
+      r = c;
+      g = x;
+    } else if (hue < 120) {
+      r = x;
+      g = c;
+    } else if (hue < 180) {
+      g = c;
+      b = x;
+    } else if (hue < 240) {
+      g = x;
+      b = c;
+    } else if (hue < 300) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    glColor3f(r + m, g + m, b + m);
+  } break;
+  case 2: // Fade mode - blue to red
+  {
+    float ratio = (float)pointIndex / totalPoints;
+    glColor3f(ratio, 0.2f, 1.0f - ratio);
+  } break;
+  }
+}
+
+/*
+ *  Update animation
+ */
+void updateAnimation() {
+  if (!appState->animate)
+    return;
+
+  unsigned int currentTime = glutGet(GLUT_ELAPSED_TIME);
+  if (appState->lastTime == 0)
+    appState->lastTime = currentTime;
+
+  double elapsed = (currentTime - appState->lastTime) / 1000.0;
+  double progress = elapsed / appState->animSpeed;
+  appState->currentPoints = (int)(progress * LORENZ_POINTS);
+
+  if (appState->currentPoints >= LORENZ_POINTS) {
+    appState->currentPoints = LORENZ_POINTS;
+    appState->lastTime = currentTime;
+  }
+  glutPostRedisplay();
+}
+
 /*
  *  Display the scene
  */
 void display() {
-  //  Clear the image
-  glClear(GL_COLOR_BUFFER_BIT);
-  //  Reset previous transforms
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_DEPTH_TEST);
   glLoadIdentity();
-  //  Set view angle
-  glRotated(ph, 1, 0, 0);
-  glRotated(th, 0, 1, 0);
-  //  Draw 10 pixel yellow points
-  glColor3f(1, 1, 0);
-  glPointSize(10);
-  glBegin(GL_POINTS);
-  switch (mode) {
-  //  Two dimensions
-  case 1:
-    glVertex2d(0.1, 0.1);
-    glVertex2d(0.3, 0.3);
-    glVertex2d(0.5, 0.5);
-    glVertex2d(0.7, 0.7);
-    glVertex2d(0.9, 0.9);
-    break;
-  //  Three dimensions - constant Z
-  case 2:
-    glVertex3d(0.1, 0.1, z);
-    glVertex3d(0.3, 0.3, z);
-    glVertex3d(0.5, 0.5, z);
-    glVertex3d(0.7, 0.7, z);
-    glVertex3d(0.9, 0.9, z);
-    break;
-  //  Three dimensions - variable Z
-  case 3:
-    glVertex3d(0.1, 0.1, 0.1);
-    glVertex3d(0.3, 0.3, 0.2);
-    glVertex3d(0.5, 0.5, 0.4);
-    glVertex3d(0.7, 0.7, 0.6);
-    glVertex3d(0.9, 0.9, 0.9);
-    break;
-  //  Four dimensions
-  case 4:
-    glVertex4d(0.1, 0.1, 0.1, w);
-    glVertex4d(0.3, 0.3, 0.2, w);
-    glVertex4d(0.5, 0.5, 0.4, w);
-    glVertex4d(0.7, 0.7, 0.6, w);
-    glVertex4d(0.9, 0.9, 0.9, w);
-    break;
+  glRotated(appState->ph, 1, 0, 0);
+  glRotated(appState->th, 0, 1, 0);
+
+  if (LORENZ_POINTS > 0) {
+    glLineWidth(1.5f);
+    int pointsToDraw =
+        appState->animate ? appState->currentPoints : LORENZ_POINTS;
+    if (pointsToDraw > 0) {
+      if (appState->colorMode == 0) {
+        setPointColor(0, LORENZ_POINTS);
+        glBegin(GL_LINE_STRIP);
+        for (int i = 0; i < pointsToDraw; i++)
+          glVertex3d(appState->points[i].x, appState->points[i].y,
+                     appState->points[i].z);
+        glEnd();
+      } else {
+        glBegin(GL_LINES);
+        for (int i = 0; i < pointsToDraw - 1; i++) {
+          setPointColor(i, LORENZ_POINTS);
+          glVertex3d(appState->points[i].x, appState->points[i].y,
+                     appState->points[i].z);
+          glVertex3d(appState->points[i + 1].x, appState->points[i + 1].y,
+                     appState->points[i + 1].z);
+        }
+        glEnd();
+      }
+    }
   }
-  glEnd();
-  //  Draw axes in white
-  glColor3f(1, 1, 1);
+
+  glColor3f(0.8f, 0.8f, 0.8f);
+  glLineWidth(1.0f);
   glBegin(GL_LINES);
-  glVertex3d(0, 0, 0);
-  glVertex3d(1, 0, 0);
-  glVertex3d(0, 0, 0);
-  glVertex3d(0, 1, 0);
-  glVertex3d(0, 0, 0);
-  glVertex3d(0, 0, 1);
+  glVertex3d(-30, 0, 0);
+  glVertex3d(20, 0, 0);
+  glVertex3d(0, -20, 0);
+  glVertex3d(0, 20, 0);
+  glVertex3d(0, 0, -10);
+  glVertex3d(0, 0, 40);
   glEnd();
-  //  Label axes
-  glRasterPos3d(1, 0, 0);
+
+  glColor3f(1, 1, 1);
+  glRasterPos3d(22, 0, 0);
   Print("X");
-  glRasterPos3d(0, 1, 0);
+  glRasterPos3d(0, 22, 0);
   Print("Y");
-  glRasterPos3d(0, 0, 1);
+  glRasterPos3d(0, 0, 42);
   Print("Z");
-  //  Display parameters
+
+  glColor3f(1, 1, 1);
   glWindowPos2i(5, 5);
-  Print("View Angle=%d,%d  %s", th, ph, text[mode]);
-  if (mode == 2)
-    Print("  z=%.1f", z);
-  else if (mode == 4)
-    Print("  w=%.1f", w);
-  //  Flush and swap
+  Print("Lorenz Attractor - View: %d,%d", appState->th, appState->ph);
+  glWindowPos2i(5, 25);
+  Print("Animation: %s | Speed: %.1fs | Color: %s",
+        appState->animate ? "ON" : "OFF", appState->animSpeed,
+        appState->colorMode == 0   ? "Single"
+        : appState->colorMode == 1 ? "Rainbow"
+                                   : "Fade");
+  if (appState->animate) {
+    glWindowPos2i(5, 45);
+    Print("Progress: %d/%d points", appState->currentPoints, LORENZ_POINTS);
+  }
+  glWindowPos2i(5, 65);
+  Print("Params: s=%.1f b=%.2f r=%.1f", appState->s, appState->b, appState->r);
+  glWindowPos2i(5, 85);
+  Print("Controls: s/S,b/B,r/R=params, SPACE=anim, c=cycle color, +/-=speed, "
+        "z/Z=zoom, arrows=rotate, 0=reset view");
+
+  updateAnimation();
   ErrCheck("display");
   glFlush();
   glutSwapBuffers();
@@ -161,35 +227,71 @@ void display() {
  *  GLUT calls this routine when a key is pressed
  */
 void key(unsigned char ch, int x, int y) {
-  //  Exit on ESC
-  if (ch == 27)
+  switch (ch) {
+  case 27: // ESC
     exit(0);
-  //  Reset view angle
-  else if (ch == '0')
-    th = ph = 0;
-  //  Switch dimensions
-  else if ('1' <= ch && ch <= '4') {
-    mode = ch - '0';
-    if (mode == 2)
-      z = 0;
-    if (mode == 4)
-      w = 1;
+    break;
+  case '0': // Reset view
+    appState->th = 0;
+    appState->ph = 15;
+    break;
+  case ' ': // Toggle animation
+    appState->animate = !appState->animate;
+    if (appState->animate) {
+      appState->lastTime = glutGet(GLUT_ELAPSED_TIME);
+      appState->currentPoints = 0;
+    }
+    break;
+  case 'c':
+    appState->colorMode = (appState->colorMode + 1) % 3;
+    break;
+  case 'C': // Cycle color mode
+    appState->colorMode = (appState->colorMode - 1) % 3;
+    break;
+  case '+':
+  case '=': // Increase speed
+    appState->animSpeed -= SPEED_STEP;
+    if (appState->animSpeed < MIN_SPEED)
+      appState->animSpeed = MIN_SPEED;
+    break;
+  case '-':
+  case '_': // Decrease speed
+    appState->animSpeed += SPEED_STEP;
+    break;
+  // Lorenz parameter controls
+  case 's':
+    appState->s += 0.5;
+    computeLorenzPoints(appState);
+    break;
+  case 'S':
+    appState->s -= 0.5;
+    computeLorenzPoints(appState);
+    break;
+  case 'b':
+    appState->b += 0.1;
+    computeLorenzPoints(appState);
+    break;
+  case 'B':
+    appState->b -= 0.1;
+    computeLorenzPoints(appState);
+    break;
+  case 'r':
+    appState->r += 1.0;
+    computeLorenzPoints(appState);
+    break;
+  case 'R':
+    appState->r -= 1.0;
+    computeLorenzPoints(appState);
+    break;
+  case 'z':
+    appState->dim -= 2.0;
+    reshape(glutGet(GLUT_WINDOW_WIDTH), glutGet(GLUT_WINDOW_HEIGHT));
+    break;
+  case 'Z':
+    appState->dim += 2.0;
+    reshape(glutGet(GLUT_WINDOW_WIDTH), glutGet(GLUT_WINDOW_HEIGHT));
+    break;
   }
-  //  Increase z or w by 0.1
-  else if (ch == '+') {
-    if (mode == 2)
-      z += 0.1;
-    else
-      w += 0.1;
-  }
-  //  Decrease z or w by 0.1
-  else if (ch == '-') {
-    if (mode == 2)
-      z -= 0.1;
-    else
-      w -= 0.1;
-  }
-  //  Tell GLUT it is necessary to redisplay the scene
   glutPostRedisplay();
 }
 
@@ -197,22 +299,16 @@ void key(unsigned char ch, int x, int y) {
  *  GLUT calls this routine when an arrow key is pressed
  */
 void special(int key, int x, int y) {
-  //  Right arrow key - increase azimuth by 5 degrees
   if (key == GLUT_KEY_RIGHT)
-    th += 5;
-  //  Left arrow key - decrease azimuth by 5 degrees
+    appState->th += 5;
   else if (key == GLUT_KEY_LEFT)
-    th -= 5;
-  //  Up arrow key - increase elevation by 5 degrees
+    appState->th -= 5;
   else if (key == GLUT_KEY_UP)
-    ph += 5;
-  //  Down arrow key - decrease elevation by 5 degrees
+    appState->ph += 5;
   else if (key == GLUT_KEY_DOWN)
-    ph -= 5;
-  //  Keep angles to +/-360 degrees
-  th %= 360;
-  ph %= 360;
-  //  Tell GLUT it is necessary to redisplay the scene
+    appState->ph -= 5;
+  appState->th %= 360;
+  appState->ph %= 360;
   glutPostRedisplay();
 }
 
@@ -220,49 +316,71 @@ void special(int key, int x, int y) {
  *  GLUT calls this routine when the window is resized
  */
 void reshape(int width, int height) {
-  //  Set the viewport to the entire window
   glViewport(0, 0, width, height);
-  //  Tell OpenGL we want to manipulate the projection matrix
   glMatrixMode(GL_PROJECTION);
-  //  Undo previous transformations
   glLoadIdentity();
-  //  Orthogonal projection box adjusted for the
-  //  aspect ratio of the window
-  double asp = (height > 0) ? (double)width / height : 1;
-  glOrtho(-asp * dim, +asp * dim, -dim, +dim, -dim, +dim);
-  //  Switch to manipulating the model matrix
+  appState->asp = (height > 0) ? (double)width / height : 1;
+  glOrtho(-appState->asp * appState->dim, +appState->asp * appState->dim,
+          -appState->dim, +appState->dim, -100, +100);
   glMatrixMode(GL_MODELVIEW);
-  //  Undo previous transformations
   glLoadIdentity();
 }
+
+/*
+ *  Idle callback for smooth animation
+ */
+void idle() { glutPostRedisplay(); }
 
 /*
  *  Start up GLUT and tell it what to do
  */
 int main(int argc, char *argv[]) {
-  //  Initialize GLUT and process user parameters
+  // Initialize state using a designated initializer list
+  State state = {
+      .s = 10.0,
+      .b = 2.6666,
+      .r = 28.0,
+      .th = 0,
+      .ph = 15,
+      .dim = 60.0,
+      .asp = 1.0,
+      .animate = 1,
+      .colorMode = 2,
+      .animSpeed = 20.0,
+      .currentPoints = 0,
+      .lastTime = 0,
+  };
+  appState = &state;
+  computeLorenzPoints(appState); // compute initial lorenz and update state
+
+  // Initialize GLUT
   glutInit(&argc, argv);
-  //  Request double buffered, true color window
-  glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
-  //  Request 500 x 500 pixel window
-  glutInitWindowSize(500, 500);
-  //  Create the window
-  glutCreateWindow("Coordinates");
+  glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH | GLUT_MULTISAMPLE);
+  glutInitWindowSize(800, 600);
+  glutCreateWindow("Lorenz Assignment: Mason Bott");
 #ifdef USEGLEW
-  //  Initialize GLEW
   if (glewInit() != GLEW_OK)
     Fatal("Error initializing GLEW\n");
 #endif
-  //  Tell GLUT to call "display" when the scene should be drawn
+
+  // Set up OpenGL
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Black background
+  glEnable(GL_DEPTH_TEST);
+  glEnable(GL_LINE_SMOOTH);
+  glEnable(GL_MULTISAMPLE);
+  glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+
+  // Setup GLUT callbacks
   glutDisplayFunc(display);
-  //  Tell GLUT to call "reshape" when the window is resized
   glutReshapeFunc(reshape);
-  //  Tell GLUT to call "special" when an arrow key is pressed
   glutSpecialFunc(special);
-  //  Tell GLUT to call "key" when a key is pressed
   glutKeyboardFunc(key);
+  glutIdleFunc(idle);
+
+  // Initialize animation timing
+  appState->lastTime = glutGet(GLUT_ELAPSED_TIME);
+
   //  Pass control to GLUT so it can interact with the user
   glutMainLoop();
-  //  Return code
   return 0;
 }
